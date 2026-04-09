@@ -11,7 +11,7 @@ from fastapi import FastAPI
 
 from api.job_processor import JobProcessor
 from api.middleware.cors import configure_cors
-from api.routes import jobs
+from api.routes import exports, jobs
 from storage.repository import TranscriptRepository
 
 load_dotenv()
@@ -38,3 +38,4 @@ app = FastAPI(
 
 configure_cors(app)
 app.include_router(jobs.router, prefix="/jobs", tags=["jobs"])
+app.include_router(exports.router, prefix="/jobs", tags=["exports"])

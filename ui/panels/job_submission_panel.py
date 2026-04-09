@@ -6,7 +6,6 @@ The submission panel POSTs YouTube URLs to the FastAPI /jobs endpoint and polls
 status. It MUST NOT import from ingestion/, transcription/, or storage/.
 """
 
-import asyncio
 from typing import Callable, Optional
 
 import httpx
@@ -44,6 +43,7 @@ class JobSubmissionPanel:
         self.current_job_id: Optional[str] = None
         self.on_job_complete: Optional[Callable[[str], None]] = None
         self._polling_active: bool = False
+        self._poll_timer = None
 
         # UI element handles (populated in render())
         self._url_input = None
@@ -128,35 +128,51 @@ class JobSubmissionPanel:
             self._created_label.set_text(f"created: {data['created_at']}")
         self._update_status_badge(data["status"])
 
-        asyncio.create_task(self._poll_status())
-
-    async def _poll_status(self) -> None:
-        if not self.current_job_id:
-            return
+        # Poll via ui.timer so updates run in the client context and reach the browser.
         self._polling_active = True
-        while self._polling_active:
+        self._poll_timer = ui.timer(3.0, self._poll_once, active=True)
+
+    async def _poll_once(self) -> None:
+        if not self._polling_active or not self.current_job_id:
+            return
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.get(
+                    f"{self.api_base}/jobs/{self.current_job_id}"
+                )
+        except Exception:
+            return
+        if resp.status_code != 200:
+            return
+        data = resp.json()
+        status = data["status"]
+        self._update_status_badge(status)
+        if status == "complete":
+            self._stop_polling()
+            if self.on_job_complete:
+                try:
+                    result = self.on_job_complete(self.current_job_id)
+                    if hasattr(result, "__await__"):
+                        await result
+                except Exception as e:
+                    ui.notify(f"Failed to load transcript: {e}", type="negative")
+            self._reset()
+        elif status == "failed":
+            self._stop_polling()
+            ui.notify(
+                f"Job failed: {data.get('error_message') or 'unknown error'}",
+                type="negative",
+            )
+            self._reset()
+
+    def _stop_polling(self) -> None:
+        self._polling_active = False
+        if self._poll_timer is not None:
             try:
-                async with httpx.AsyncClient() as client:
-                    resp = await client.get(
-                        f"{self.api_base}/jobs/{self.current_job_id}", timeout=10.0
-                    )
-                if resp.status_code == 200:
-                    data = resp.json()
-                    status = data["status"]
-                    self._update_status_badge(status)
-                    if status == "complete":
-                        self._polling_active = False
-                        if self.on_job_complete:
-                            self.on_job_complete(self.current_job_id)
-                        self._reset()
-                        return
-                    if status == "failed":
-                        self._polling_active = False
-                        self._reset()
-                        return
+                self._poll_timer.deactivate()
             except Exception:
                 pass
-            await asyncio.sleep(3)
+            self._poll_timer = None
 
     def _update_status_badge(self, status: str) -> None:
         color = status_color(status)

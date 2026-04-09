@@ -25,6 +25,7 @@ class TranscriptViewerPanel:
     def __init__(self, api_base: Optional[str] = None):
         self.api_base = api_base or os.getenv("API_BASE_URL", "http://localhost:8000")
         self._transcript_data: Optional[dict] = None
+        self._current_job_id: Optional[str] = None
 
         # UI element handles
         self._segment_container = None
@@ -32,6 +33,7 @@ class TranscriptViewerPanel:
         self._video_info_card = None
         self._empty_state = None
         self._copy_button = None
+        self._export_buttons: list = []
 
     # ------------------------------ rendering ------------------------------
 
@@ -48,6 +50,15 @@ class TranscriptViewerPanel:
                 ).style(f"background-color: {NTH_ACCENT_BLUE}; color: white;")
                 self._copy_button.disable()
 
+            with ui.row().classes("w-full gap-2"):
+                for fmt in ("txt", "srt", "json", "docx"):
+                    btn = ui.button(
+                        fmt.upper(),
+                        on_click=lambda _e=None, f=fmt: self._download(f),
+                    ).props("dense")
+                    btn.disable()
+                    self._export_buttons.append(btn)
+
             self._video_info_card = ui.column().classes("w-full")
             self._segment_container = ui.column().classes("w-full max-h-96 overflow-auto")
             self._full_text_area = ui.textarea(label="Full Text").props(
@@ -59,8 +70,9 @@ class TranscriptViewerPanel:
 
     # ------------------------------- actions -------------------------------
 
-    def load_transcript(self, job_id: str) -> None:
-        data = self._fetch_transcript(job_id)
+    async def load_transcript(self, job_id: str) -> None:
+        self._current_job_id = job_id
+        data = await self._fetch_transcript_async(job_id)
         if data is None:
             ui.notify(f"Failed to load transcript for job {job_id}", type="negative")
             return
@@ -71,10 +83,35 @@ class TranscriptViewerPanel:
             self._full_text_area.set_value(data.get("full_text", ""))
         if self._copy_button is not None:
             self._copy_button.enable()
+        for btn in self._export_buttons:
+            btn.enable()
         if self._empty_state is not None:
             self._empty_state.set_visibility(False)
 
+    def _download(self, fmt: str) -> None:
+        if not self._current_job_id:
+            ui.notify("No transcript loaded", type="warning")
+            return
+        url = (
+            f"{self.api_base}/jobs/{self._current_job_id}"
+            f"/transcript/export?format={fmt}"
+        )
+        ui.download(url)
+
+    async def _fetch_transcript_async(self, job_id: str) -> Optional[dict]:
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                resp = await client.get(
+                    f"{self.api_base}/jobs/{job_id}/transcript"
+                )
+        except Exception:
+            return None
+        if resp.status_code == 200:
+            return resp.json()
+        return None
+
     def _fetch_transcript(self, job_id: str) -> Optional[dict]:
+        """Sync helper retained for tests."""
         try:
             resp = httpx.get(
                 f"{self.api_base}/jobs/{job_id}/transcript", timeout=15.0
