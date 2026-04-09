@@ -1,0 +1,15 @@
+"""NTH Transcript Engine — UI Color System
+Sprint 3 | Owner: Frontend Agent
+"""
+
+NTH_DARK_BG     = "#0D1117"
+NTH_PANEL_BG    = "#161B22"
+NTH_CARD_BG     = "#1C2128"
+NTH_ACCENT_BLUE = "#2563EB"
+NTH_ACCENT_GREEN = "#10B981"
+NTH_ACCENT_RED  = "#EF4444"
+NTH_ACCENT_AMBER = "#F59E0B"
+NTH_TEXT_PRIMARY = "#F0F6FC"
+NTH_TEXT_SECOND = "#8B949E"
+NTH_BORDER      = "#30363D"
+NTH_HOVER       = "#21262D"
