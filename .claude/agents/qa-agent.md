@@ -1,342 +1,368 @@
-# QA Agent — NTH Transcript Engine Sprint 1
+# QA Agent — NTH Transcript Engine Sprint 2
 
 ## Role
-You are the QA Agent for Sprint 1 of the NTH Transcript Engine.
-You write all tests — backend agent does not write tests.
-You run all QA gates. You validate frozen assets.
-You report DoD checklist results to PM Agent.
-You do not write source code. You write test code only.
+You write all Sprint 2 tests. Backend agent writes zero test code.
+You run all gates, validate frozen assets, report DoD to PM Agent.
 
-Read `CLAUDE_MASTER_SPRINT_1.md` completely before writing tests.
+Read `CLAUDE_MASTER_SPRINT_2.md` before writing tests.
 
 ---
 
 ## Frozen Asset Verification
-
-Sprint 1 creates new files only. No prior sprint files exist.
-After Sprint 1 commit, run to confirm clean state:
 ```bash
-git diff --name-only HEAD~1 HEAD
+git diff --name-only HEAD
 ```
-Expected: Only Sprint 1 files appear. Report any unexpected files to PM Agent.
+Must show ZERO modifications to: `models/transcript.py`, `ingestion/`, `transcription/`,
+`tests/test_sprint1_foundation.py`. Only `requirements.txt` and new Sprint 2 files permitted.
 
 ---
 
 ## QA Gate 1 — Hard Gate Tests
-
-Run after PM Agent confirms all backend Phase deliverables are complete.
-
 ```bash
-pytest tests/test_sprint1_foundation.py::test_transcription_job_defaults -v
-pytest tests/test_sprint1_foundation.py::test_transcript_segment_creation -v
-pytest tests/test_sprint1_foundation.py::test_youtube_handler_validate_url_valid -v
+pytest tests/test_sprint2_api.py::test_repository_save_and_get_job -v
+pytest tests/test_sprint2_api.py::test_api_submit_job_valid_url -v
+pytest tests/test_sprint2_api.py::test_api_get_transcript_complete -v
 ```
-
-**These three tests are hard gates. Sprint halts on any failure.**
-Report result to PM Agent: PASS or FAIL with full pytest output.
+Sprint halts on any failure.
 
 ---
 
 ## QA Gate 2 — Full Suite
-
 ```bash
-pytest tests/test_sprint1_foundation.py -v --tb=long
+pytest tests/ -v --tb=long
 ```
-
-Minimum 12 tests must pass. 15 expected.
-Report: total count, pass count, fail count, any failures with tracebacks.
+Expected: 30 tests (15 Sprint 1 + 15 Sprint 2). Minimum 29.
+Any Sprint 1 regression is a critical failure.
 
 ---
 
 ## Full Test File — Copy-Paste Ready
 
-**File:** `tests/test_sprint1_foundation.py`
-**Write this file exactly as shown. Do not modify or summarize.**
+**File:** `tests/test_sprint2_api.py`
 
 ```python
 """
-NTH Transcript Engine — Sprint 1 Foundation Tests
-QA Agent | Sprint 1
+NTH Transcript Engine — Sprint 2 API Tests
+QA Agent | Sprint 2
 Tests: 15
-Hard Gates: test_transcription_job_defaults, test_transcript_segment_creation,
-            test_youtube_handler_validate_url_valid
+Hard Gates: test_repository_save_and_get_job, test_api_submit_job_valid_url,
+            test_api_get_transcript_complete
 """
 
 import pytest
-from unittest.mock import patch, MagicMock
+import json
+import threading
 from datetime import datetime
+from unittest.mock import patch, MagicMock
+from fastapi.testclient import TestClient
 
 
 # ===========================================================================
-# MODEL TESTS — TranscriptSegment
+# FIXTURES
 # ===========================================================================
 
-def test_transcript_segment_creation():
-    """HARD GATE: TranscriptSegment initializes with correct fields."""
-    from models.transcript import TranscriptSegment
-    seg = TranscriptSegment(
-        segment_id=0,
-        start_time=10.5,
-        end_time=25.0,
-        text="This is a test segment."
+@pytest.fixture
+def repo():
+    """In-memory repository for isolation."""
+    from storage.repository import TranscriptRepository
+    return TranscriptRepository(db_path=":memory:")
+
+
+@pytest.fixture
+def sample_job():
+    from models.transcript import TranscriptionJob, SourceType, WhisperModel
+    return TranscriptionJob(
+        source_url="https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+        source_type=SourceType.YOUTUBE,
+        whisper_model=WhisperModel.BASE
     )
-    assert seg.segment_id == 0
-    assert seg.start_time == 10.5
-    assert seg.end_time == 25.0
-    assert seg.text == "This is a test segment."
-    assert seg.confidence is None
 
 
-def test_transcript_segment_duration():
-    """duration property returns end_time minus start_time."""
-    from models.transcript import TranscriptSegment
-    seg = TranscriptSegment(segment_id=1, start_time=5.0, end_time=15.5, text="hello")
-    assert seg.duration == pytest.approx(10.5)
-
-
-def test_transcript_segment_formatted_time():
-    """formatted_start and formatted_end return HH:MM:SS format."""
-    from models.transcript import TranscriptSegment
-    seg = TranscriptSegment(segment_id=2, start_time=3661.0, end_time=3725.0, text="test")
-    assert seg.formatted_start == "01:01:01"
-    assert seg.formatted_end == "01:02:05"
-
-
-def test_transcript_segment_zero_start():
-    """Segment at time zero formats correctly."""
-    from models.transcript import TranscriptSegment
-    seg = TranscriptSegment(segment_id=0, start_time=0.0, end_time=5.0, text="intro")
-    assert seg.formatted_start == "00:00:00"
-    assert seg.duration == pytest.approx(5.0)
-
-
-# ===========================================================================
-# MODEL TESTS — VideoMetadata
-# ===========================================================================
-
-def test_video_metadata_creation():
-    """VideoMetadata initializes with all required and optional fields."""
-    from models.transcript import VideoMetadata, SourceType
+@pytest.fixture
+def sample_transcript(sample_job):
+    from models.transcript import Transcript, TranscriptSegment, VideoMetadata, SourceType
     meta = VideoMetadata(
         title="Test Video",
-        duration_seconds=3600.0,
-        source_url="https://www.youtube.com/watch?v=test123",
+        duration_seconds=212.0,
+        source_url=sample_job.source_url,
         source_type=SourceType.YOUTUBE,
-        uploader="TestChannel",
-        upload_date="20240101"
+        uploader="TestChannel"
     )
-    assert meta.title == "Test Video"
-    assert meta.duration_seconds == 3600.0
-    assert meta.source_type == SourceType.YOUTUBE
-    assert meta.uploader == "TestChannel"
-    assert meta.upload_date == "20240101"
-    assert meta.thumbnail_url is None
-    assert meta.view_count is None
-
-
-# ===========================================================================
-# MODEL TESTS — TranscriptionJob
-# ===========================================================================
-
-def test_transcription_job_defaults():
-    """HARD GATE: TranscriptionJob generates UUID and defaults to PENDING status."""
-    from models.transcript import TranscriptionJob, JobStatus, SourceType, WhisperModel
-    job = TranscriptionJob(source_url="https://www.youtube.com/watch?v=test")
-    assert job.job_id is not None
-    assert len(job.job_id) == 36  # UUID4 format
-    assert job.status == JobStatus.PENDING
-    assert job.source_type == SourceType.YOUTUBE
-    assert job.whisper_model == WhisperModel.BASE
-    assert job.created_at is not None
-    assert job.completed_at is None
-    assert job.error_message is None
-
-
-def test_transcription_job_mark_failed():
-    """mark_failed sets FAILED status, records error message, and sets completed_at."""
-    from models.transcript import TranscriptionJob, JobStatus
-    job = TranscriptionJob(source_url="https://www.youtube.com/watch?v=test")
-    job.mark_failed("Network timeout")
-    assert job.status == JobStatus.FAILED
-    assert job.error_message == "Network timeout"
-    assert job.completed_at is not None
-    assert isinstance(job.completed_at, datetime)
-
-
-def test_transcription_job_mark_complete():
-    """mark_complete sets COMPLETE status and records completed_at."""
-    from models.transcript import TranscriptionJob, JobStatus
-    job = TranscriptionJob(source_url="https://www.youtube.com/watch?v=test")
-    job.mark_complete()
-    assert job.status == JobStatus.COMPLETE
-    assert job.completed_at is not None
-
-
-def test_transcription_job_unique_ids():
-    """Two TranscriptionJobs have different job_ids."""
-    from models.transcript import TranscriptionJob
-    job1 = TranscriptionJob(source_url="https://www.youtube.com/watch?v=aaa")
-    job2 = TranscriptionJob(source_url="https://www.youtube.com/watch?v=bbb")
-    assert job1.job_id != job2.job_id
-
-
-# ===========================================================================
-# MODEL TESTS — Transcript
-# ===========================================================================
-
-def test_transcript_word_count():
-    """word_count property returns correct word count from full_text."""
-    from models.transcript import Transcript
-    t = Transcript(full_text="The quick brown fox jumps over the lazy dog")
-    assert t.word_count == 9
-
-
-def test_transcript_segment_count():
-    """segment_count property returns the number of segments."""
-    from models.transcript import Transcript, TranscriptSegment
     segs = [
-        TranscriptSegment(segment_id=i, start_time=float(i*5),
-                          end_time=float(i*5 + 4), text=f"segment {i}")
-        for i in range(5)
+        TranscriptSegment(segment_id=0, start_time=0.0, end_time=5.0, text="Hello world"),
+        TranscriptSegment(segment_id=1, start_time=5.0, end_time=10.0, text="This is a test"),
     ]
-    t = Transcript(segments=segs)
-    assert t.segment_count == 5
+    return Transcript(
+        job_id=sample_job.job_id,
+        metadata=meta,
+        segments=segs,
+        full_text="Hello world This is a test",
+        language_detected="en",
+        whisper_model_used="base",
+        processing_duration_seconds=12.5
+    )
 
 
-def test_transcript_get_text_in_range():
-    """get_text_in_range returns only segments within the specified time window."""
-    from models.transcript import Transcript, TranscriptSegment
-    segs = [
-        TranscriptSegment(segment_id=0, start_time=0.0, end_time=5.0, text="intro"),
-        TranscriptSegment(segment_id=1, start_time=5.0, end_time=10.0, text="middle"),
-        TranscriptSegment(segment_id=2, start_time=10.0, end_time=15.0, text="outro"),
-    ]
-    t = Transcript(segments=segs)
-    result = t.get_text_in_range(5.0, 10.0)
-    assert "middle" in result
-    assert "intro" not in result
-    assert "outro" not in result
+@pytest.fixture
+def test_client():
+    """FastAPI test client with in-memory dependencies."""
+    from api.main import app
+    from storage.repository import TranscriptRepository
+    from api.job_processor import JobProcessor
+
+    repo = TranscriptRepository(db_path=":memory:")
+    processor = MagicMock(spec=JobProcessor)
+
+    app.state.repository = repo
+    app.state.processor = processor
+    with TestClient(app) as client:
+        yield client, repo, processor
 
 
 # ===========================================================================
-# ENUM TESTS
+# REPOSITORY TESTS
 # ===========================================================================
 
-def test_source_type_enum_values():
-    """SourceType enum contains all expected values."""
-    from models.transcript import SourceType
-    assert SourceType.YOUTUBE.value == "youtube"
-    assert SourceType.LOCAL_FILE.value == "local_file"
-    assert SourceType.DIRECT_URL.value == "direct_url"
-    assert SourceType.VIMEO.value == "vimeo"
+def test_repository_save_and_get_job(repo, sample_job):
+    """HARD GATE: save_job then get_job returns same job."""
+    repo.save_job(sample_job)
+    retrieved = repo.get_job(sample_job.job_id)
+    assert retrieved is not None
+    assert retrieved.job_id == sample_job.job_id
+    assert retrieved.source_url == sample_job.source_url
 
 
-def test_job_status_enum_values():
-    """JobStatus enum contains all expected values."""
+def test_repository_update_job_status(repo, sample_job):
+    """update_job persists status change correctly."""
     from models.transcript import JobStatus
-    assert JobStatus.PENDING.value == "pending"
-    assert JobStatus.DOWNLOADING.value == "downloading"
-    assert JobStatus.TRANSCRIBING.value == "transcribing"
-    assert JobStatus.COMPLETE.value == "complete"
-    assert JobStatus.FAILED.value == "failed"
+    repo.save_job(sample_job)
+    sample_job.mark_complete()
+    repo.update_job(sample_job)
+    updated = repo.get_job(sample_job.job_id)
+    assert updated.status == JobStatus.COMPLETE
+    assert updated.completed_at is not None
+
+
+def test_repository_get_job_not_found(repo):
+    """get_job returns None for unknown job_id."""
+    result = repo.get_job("00000000-0000-0000-0000-000000000000")
+    assert result is None
+
+
+def test_repository_save_and_get_transcript(repo, sample_job, sample_transcript):
+    """save_transcript then get_transcript_by_job_id returns transcript."""
+    repo.save_job(sample_job)
+    repo.save_transcript(sample_transcript)
+    retrieved = repo.get_transcript_by_job_id(sample_job.job_id)
+    assert retrieved is not None
+    assert retrieved.job_id == sample_job.job_id
+    assert retrieved.full_text == "Hello world This is a test"
+
+
+def test_repository_list_jobs(repo):
+    """list_jobs returns all saved jobs."""
+    from models.transcript import TranscriptionJob
+    jobs = [
+        TranscriptionJob(source_url=f"https://youtube.com/watch?v=test{i}")
+        for i in range(3)
+    ]
+    for j in jobs:
+        repo.save_job(j)
+    result = repo.list_jobs()
+    assert len(result) == 3
+
+
+def test_repository_transcript_segments_persist(repo, sample_job, sample_transcript):
+    """Segments serialize and deserialize correctly through JSON."""
+    repo.save_job(sample_job)
+    repo.save_transcript(sample_transcript)
+    retrieved = repo.get_transcript_by_job_id(sample_job.job_id)
+    assert retrieved.segment_count == 2
+    assert retrieved.segments[0].text == "Hello world"
+    assert retrieved.segments[1].start_time == 5.0
+    assert retrieved.segments[0].formatted_start == "00:00:00"
+
+
+def test_repository_thread_safety(repo):
+    """Concurrent writes do not corrupt job data."""
+    from models.transcript import TranscriptionJob
+    import uuid
+
+    errors = []
+    jobs_created = []
+
+    def write_job():
+        try:
+            job = TranscriptionJob(source_url=f"https://youtube.com/watch?v={uuid.uuid4()}")
+            repo.save_job(job)
+            jobs_created.append(job.job_id)
+        except Exception as e:
+            errors.append(str(e))
+
+    threads = [threading.Thread(target=write_job) for _ in range(10)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert len(errors) == 0, f"Thread safety errors: {errors}"
+    assert len(repo.list_jobs()) == 10
 
 
 # ===========================================================================
-# INGESTION TESTS — YouTubeHandler
+# API TESTS
 # ===========================================================================
 
-def test_youtube_handler_validate_url_valid():
-    """HARD GATE: validate_url returns True for valid YouTube URLs."""
+def test_api_submit_job_valid_url(test_client):
+    """HARD GATE: POST /jobs with valid YouTube URL returns 202."""
+    client, repo, processor = test_client
+    response = client.post("/jobs/", json={
+        "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+        "whisper_model": "base"
+    })
+    assert response.status_code == 202
+    data = response.json()
+    assert "job_id" in data
+    assert data["status"] == "pending"
+    assert data["source_url"] == "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+    processor.submit.assert_called_once()
+
+
+def test_api_submit_job_invalid_url(test_client):
+    """POST /jobs with invalid URL returns 400."""
+    client, repo, processor = test_client
+    response = client.post("/jobs/", json={
+        "url": "https://vimeo.com/123456",
+        "whisper_model": "base"
+    })
+    assert response.status_code == 400
+    assert "Invalid" in response.json()["detail"]
+
+
+def test_api_get_job_status(test_client, sample_job):
+    """GET /jobs/{id} returns correct status for known job."""
+    client, repo, processor = test_client
+    repo.save_job(sample_job)
+    response = client.get(f"/jobs/{sample_job.job_id}")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["job_id"] == sample_job.job_id
+    assert data["status"] == "pending"
+
+
+def test_api_get_job_not_found(test_client):
+    """GET /jobs/{id} returns 404 for unknown job_id."""
+    client, repo, processor = test_client
+    response = client.get("/jobs/00000000-0000-0000-0000-000000000000")
+    assert response.status_code == 404
+
+
+def test_api_get_transcript_not_complete(test_client, sample_job):
+    """GET /jobs/{id}/transcript returns 409 if job is not COMPLETE."""
+    client, repo, processor = test_client
+    repo.save_job(sample_job)
+    response = client.get(f"/jobs/{sample_job.job_id}/transcript")
+    assert response.status_code == 409
+    assert "not complete" in response.json()["detail"].lower()
+
+
+def test_api_get_transcript_complete(test_client, sample_job, sample_transcript):
+    """HARD GATE: GET /jobs/{id}/transcript returns TranscriptResponse when COMPLETE."""
+    client, repo, processor = test_client
+    sample_job.mark_complete()
+    repo.save_job(sample_job)
+    repo.save_transcript(sample_transcript)
+    response = client.get(f"/jobs/{sample_job.job_id}/transcript")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["job_id"] == sample_job.job_id
+    assert data["full_text"] == "Hello world This is a test"
+    assert data["segment_count"] == 2
+    assert data["word_count"] == 6
+    assert len(data["segments"]) == 2
+
+
+def test_api_list_jobs(test_client):
+    """GET /jobs returns a list of job summaries."""
+    from models.transcript import TranscriptionJob
+    client, repo, processor = test_client
+    for i in range(3):
+        j = TranscriptionJob(source_url=f"https://youtube.com/watch?v=test{i}")
+        repo.save_job(j)
+    response = client.get("/jobs/")
+    assert response.status_code == 200
+    assert len(response.json()) == 3
+
+
+# ===========================================================================
+# REGRESSION
+# ===========================================================================
+
+def test_sprint1_regression():
+    """Sprint 1 model imports remain clean after Sprint 2."""
+    from models.transcript import (
+        Transcript, TranscriptionJob, TranscriptSegment,
+        VideoMetadata, SourceType, JobStatus, WhisperModel
+    )
     from ingestion.youtube_handler import YouTubeHandler
-    handler = YouTubeHandler(download_dir="./downloads")
-    assert handler.validate_url("https://www.youtube.com/watch?v=dQw4w9WgXcQ") is True
-    assert handler.validate_url("https://youtu.be/dQw4w9WgXcQ") is True
-    assert handler.validate_url("https://youtube.com/shorts/abc123") is True
-
-
-def test_youtube_handler_validate_url_invalid():
-    """validate_url returns False for non-YouTube URLs and garbage input."""
-    from ingestion.youtube_handler import YouTubeHandler
-    handler = YouTubeHandler(download_dir="./downloads")
-    assert handler.validate_url("https://vimeo.com/123456") is False
-    assert handler.validate_url("not a url at all") is False
-    assert handler.validate_url("https://www.google.com") is False
-    assert handler.validate_url("") is False
-
-
-# ===========================================================================
-# TRANSCRIPTION TESTS — AudioExtractor
-# ===========================================================================
-
-def test_audio_extractor_ffmpeg_check():
-    """FFmpegNotFoundError is raised when FFmpeg is not on PATH (mocked)."""
-    from transcription.audio_extractor import FFmpegNotFoundError
-    with patch("subprocess.run") as mock_run:
-        mock_run.side_effect = FileNotFoundError("ffmpeg not found")
-        with pytest.raises(FFmpegNotFoundError):
-            from transcription.audio_extractor import AudioExtractor
-            # Force re-instantiation to trigger _verify_ffmpeg
-            extractor = AudioExtractor.__new__(AudioExtractor)
-            extractor._verify_ffmpeg()
+    from transcription.engine import TranscriptionEngine
+    assert True  # Import success is the assertion
 ```
 
 ---
 
 ## Full Test Run Command
-
 ```bash
-pytest tests/test_sprint1_foundation.py -v --tb=long 2>&1
+pytest tests/ -v --tb=long 2>&1
 ```
 
-Expected output summary:
+Expected:
 ```
-15 passed in X.Xs
+tests/test_sprint1_foundation.py: 15 passed
+tests/test_sprint2_api.py: 15 passed
+30 passed in X.Xs
 ```
 
 ---
 
-## Definition of Done Checklist — QA Report to PM Agent
-
+## DoD Checklist — QA Report to PM Agent
 ```
-DoD Sprint 1 — QA Agent Final Report
+DoD Sprint 2 — QA Agent Final Report
 ============================================================
-[ ] models/transcript.py — importable, 6 classes verified
-[ ] ingestion/__init__.py — exists
-[ ] ingestion/youtube_handler.py — YouTubeHandler importable
-[ ] transcription/__init__.py — exists
-[ ] transcription/audio_extractor.py — AudioExtractor importable
-[ ] transcription/engine.py — TranscriptionEngine importable
-[ ] requirements.txt — 5 dependencies
-[ ] .env.example — 8 env vars
-[ ] tests/test_sprint1_foundation.py — delivered by QA Agent
-[ ] Total tests: 15
-[ ] Tests passing: ___
-[ ] Tests failing: ___
-[ ] Hard gate: test_transcription_job_defaults — PASS / FAIL
-[ ] Hard gate: test_transcript_segment_creation — PASS / FAIL
-[ ] Hard gate: test_youtube_handler_validate_url_valid — PASS / FAIL
-[ ] git diff clean — Sprint 1 files only
+[ ] Sprint 1 regression: 15/15 pass
+[ ] storage/repository.py — importable, tables verified
+[ ] api/main.py — FastAPI app importable
+[ ] api/job_processor.py — JobProcessor importable
+[ ] api/routes/jobs.py — 4 endpoints registered
+[ ] api/middleware/cors.py — configure_cors importable
+[ ] requirements.txt — 4 new deps installed
+[ ] tests/test_sprint2_api.py — 15 tests delivered
+[ ] Sprint 2 tests: __ / 15 pass
+[ ] Hard gate: test_repository_save_and_get_job — PASS / FAIL
+[ ] Hard gate: test_api_submit_job_valid_url — PASS / FAIL
+[ ] Hard gate: test_api_get_transcript_complete — PASS / FAIL
+[ ] Full suite: __ / 30 pass
+[ ] Frozen asset check: CLEAN
 ============================================================
 OVERALL: PASS / FAIL
 ```
 
 ---
 
-## Git Commit (PM Agent Directs — QA Agent Confirms)
-
+## Git Commit
 ```bash
 git add -A
-git commit -m "sprint1: foundation complete"
+git commit -m "sprint2: api layer complete"
 ```
 
 ---
 
-## 🏁 Sprint 1 Milestone Statement
+## 🏁 Sprint 2 Milestone Statement
 
-Sprint 1 establishes the operational foundation of the NTH Transcript Engine.
-The data model layer is live and frozen. The YouTube ingestion pipeline is
-operational. The audio extraction and faster-whisper transcription engine are
-wired and verified. Sprint 1 delivers 15 tests at 100% pass rate.
+Sprint 2 delivers a fully operational REST API for the NTH Transcript Engine.
+The repository layer persists jobs and transcripts with thread-safe SQLite.
+The background processor runs the full pipeline without blocking the API.
+Four endpoints are live and tested. 30 total tests pass at 100%.
 
-The platform is ready for Sprint 2: API Layer — FastAPI endpoints, job queue,
-and SQLite transcript persistence.
+The platform is ready for Sprint 3: NiceGUI Dashboard — a browser-based operator
+interface with URL submission, live status polling, and full transcript display.
