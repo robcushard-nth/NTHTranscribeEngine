@@ -146,11 +146,12 @@ uvicorn api.main:app --reload --host 0.0.0.0 --port 8000
 ### Terminal 2 — UI dashboard
 
 ```bash
-python ui/app.py
+python -m ui.app
 ```
 
 - Launches the NiceGUI dashboard at `http://localhost:8080`.
 - Reads `API_BASE_URL` from `.env` (defaults to `http://localhost:8000`).
+- Run it as a module (`-m ui.app`) from the project root so the absolute `from ui.colors import ...` imports in [ui/app.py](ui/app.py) resolve. `python ui/app.py` will fail with `ModuleNotFoundError: No module named 'ui'`.
 
 Open [http://localhost:8080](http://localhost:8080) in a browser and you're live.
 

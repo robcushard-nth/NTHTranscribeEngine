@@ -68,8 +68,10 @@ Wait until you see `Application startup complete.`
 **Terminal 2 — start the UI:**
 
 ```bash
-python ui/app.py
+python -m ui.app
 ```
+
+Run it as a module from the project root — not `python ui/app.py`, which fails with `ModuleNotFoundError: No module named 'ui'` because the dashboard uses absolute imports (`from ui.colors import ...`).
 
 Then open your browser to:
 
