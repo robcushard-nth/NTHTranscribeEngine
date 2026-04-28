@@ -4,6 +4,7 @@ Sprint 5 | Owner: Backend Agent
 """
 
 import shutil
+import unicodedata
 from pathlib import Path
 
 from models.transcript import (
@@ -24,6 +25,12 @@ _ALLOWED_EXTENSIONS = {
 }
 
 
+def _clean_path(source: str) -> str:
+    """Strip wrapping quotes and Unicode format chars (Windows 'Copy as path' inserts U+202A)."""
+    s = source.strip().strip('"').strip("'")
+    return "".join(ch for ch in s if unicodedata.category(ch) != "Cf")
+
+
 class LocalFileHandler:
     """Validates and stages local video/audio files for transcription."""
 
@@ -34,8 +41,11 @@ class LocalFileHandler:
     def validate_path(self, source: str) -> bool:
         if not isinstance(source, str) or not source.strip():
             return False
+        cleaned = _clean_path(source)
+        if not cleaned:
+            return False
         try:
-            p = Path(source.strip())
+            p = Path(cleaned)
         except (OSError, ValueError):
             return False
         try:
@@ -50,7 +60,7 @@ class LocalFileHandler:
             job.mark_failed(f"Invalid local file path: {source}")
             raise LocalFileIngestionError(f"Invalid local file path: {source}")
 
-        src = Path(source.strip())
+        src = Path(_clean_path(source))
         job.status = JobStatus.DOWNLOADING
         job.source_url = str(src)
         job.source_type = SourceType.LOCAL_FILE

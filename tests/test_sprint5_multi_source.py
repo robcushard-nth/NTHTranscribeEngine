@@ -81,6 +81,14 @@ def test_local_file_validate_empty_string(tmp_downloads):
     assert handler.validate_path("") is False
 
 
+def test_local_file_validate_strips_windows_bidi_mark(tmp_downloads, tmp_mp4):
+    """Windows File Explorer 'Copy as path' prepends U+202A; validator must tolerate it."""
+    from ingestion.local_file_handler import LocalFileHandler
+    handler = LocalFileHandler(download_dir=tmp_downloads)
+    assert handler.validate_path("‪" + tmp_mp4) is True
+    assert handler.validate_path('"' + tmp_mp4 + '"') is True  # quoted path
+
+
 # ============================================================================
 # LocalFileHandler — ingest
 # ============================================================================
