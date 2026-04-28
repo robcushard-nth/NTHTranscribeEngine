@@ -64,8 +64,8 @@ class JobSubmissionPanel:
             )
 
             self._url_input = ui.input(
-                label="YouTube URL",
-                placeholder="https://www.youtube.com/watch?v=...",
+                label="Video Source (URL or local file path)",
+                placeholder="https://youtube.com/... or C:\\path\\to\\video.mp4",
             ).classes("w-full")
 
             self._model_select = ui.select(
@@ -97,7 +97,7 @@ class JobSubmissionPanel:
         url = (self._url_input.value or "").strip() if self._url_input else ""
         model = self._model_select.value if self._model_select else "base"
         if not url:
-            ui.notify("Please enter a YouTube URL", type="warning")
+            ui.notify("Please enter a video URL or local file path", type="warning")
             return
 
         try:

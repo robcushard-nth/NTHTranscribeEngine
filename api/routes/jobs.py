@@ -11,6 +11,9 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Request, status
 from pydantic import BaseModel
 
+from ingestion.local_file_handler import LocalFileHandler
+from ingestion.url_handler import DirectURLHandler
+from ingestion.vimeo_handler import VimeoHandler
 from ingestion.youtube_handler import YouTubeHandler
 from models.transcript import (
     JobStatus,
@@ -76,15 +79,37 @@ def _job_to_response(job: TranscriptionJob) -> JobStatusResponse:
 # ---------------------------------- router -----------------------------------
 
 router = APIRouter()
-_url_validator = YouTubeHandler.__new__(YouTubeHandler)  # validate_url is stateless
+
+# Stateless validators — instantiated without __init__ side effects.
+_yt_validator = YouTubeHandler.__new__(YouTubeHandler)
+_vimeo_validator = VimeoHandler.__new__(VimeoHandler)
+_url_validator_direct = DirectURLHandler.__new__(DirectURLHandler)
+_local_validator = LocalFileHandler.__new__(LocalFileHandler)
+
+
+def _detect_source_type(source: str) -> Optional[SourceType]:
+    """Walk validators in priority order. Return None if none accept."""
+    if _yt_validator.validate_url(source):
+        return SourceType.YOUTUBE
+    if _vimeo_validator.validate_url(source):
+        return SourceType.VIMEO
+    if _url_validator_direct.validate_url(source):
+        return SourceType.DIRECT_URL
+    if _local_validator.validate_path(source):
+        return SourceType.LOCAL_FILE
+    return None
 
 
 @router.post("", response_model=JobStatusResponse, status_code=status.HTTP_202_ACCEPTED)
 def submit_job(payload: SubmitJobRequest, request: Request) -> JobStatusResponse:
-    if not _url_validator.validate_url(payload.url):
+    detected = _detect_source_type(payload.url)
+    if detected is None:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Invalid YouTube URL: {payload.url}",
+            detail=(
+                "Unrecognized source. Provide a YouTube URL, Vimeo URL, "
+                "direct video URL ending in a media extension, or a local file path."
+            ),
         )
 
     try:
@@ -97,7 +122,7 @@ def submit_job(payload: SubmitJobRequest, request: Request) -> JobStatusResponse
 
     job = TranscriptionJob(
         source_url=payload.url,
-        source_type=SourceType.YOUTUBE,
+        source_type=detected,
         whisper_model=whisper_model,
         status=JobStatus.PENDING,
     )
