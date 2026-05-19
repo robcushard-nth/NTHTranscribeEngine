@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Virtual environments
+venv/
+.venv/
+env/
+.env
+
+# Build artifacts
+build/
+dist/
+*.egg
+
+# IDE / editor
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# NTH Transcript Engine runtime state
+# Downloaded media and extracted audio (per-job UUID folders)
+downloads/
+# SQLite job + transcript database
+nth_transcripts.db
+*.db-journal
+*.db-wal
+*.db-shm
