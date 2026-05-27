@@ -26,19 +26,27 @@ For installation, configuration, architecture, and the REST API reference, see [
 
 ## What this tool does
 
-Give it a YouTube URL. It:
+Give it **any one of these**:
 
-1. Downloads the video.
-2. Extracts the audio.
+- A **YouTube URL** (`youtube.com/watch?v=...`, `youtu.be/...`, `/shorts/...`, `/embed/...`)
+- A **Vimeo URL** (`vimeo.com/123456`, `player.vimeo.com/video/...`)
+- A **direct video or audio URL** (`https://example.com/clip.mp4`, also `.mov`, `.mkv`, `.avi`, `.webm`, `.flv`, `.mp3`, `.wav`, `.m4a`)
+- A **local file path** on this machine (any of the same media extensions — e.g. `C:\Users\You\Videos\meeting.mp4` or `D:\audio\recording.mp3`)
+
+It:
+
+1. **Fetches the source** — downloads it (YouTube/Vimeo/direct URL) or copies it into the working directory (local file).
+2. Extracts the audio with FFmpeg.
 3. Transcribes the audio locally using a Whisper model (no cloud API, no data leaves the machine).
 4. Saves the transcript with timestamps to a local database.
 5. Lets you browse, copy, and export the transcript as TXT, SRT, JSON, or DOCX.
 
 Typical uses:
-- Building searchable archives of interviews, webinars, or lectures.
+- Transcribing internal meeting recordings (Zoom, Teams, Webex) from your local Downloads folder — audio never leaves the host.
+- Building searchable archives of interviews, webinars, or lectures from public sources.
 - Generating `.srt` subtitle files for re-uploading video.
 - Producing DOCX transcripts for review, quoting, or compliance.
-- Getting structured JSON segments for downstream text analysis.
+- Getting structured JSON segments for downstream text analysis or LLM input.
 
 ---
 
@@ -48,8 +56,8 @@ You need:
 
 - The app installed and dependencies in place. See the [README Installation section](README.md#installation).
 - **FFmpeg** available on your system PATH. Confirm with `ffmpeg -version`.
-- A reachable internet connection — yt-dlp downloads the source video from YouTube.
-- A valid YouTube URL you have the right to transcribe.
+- **A reachable internet connection** — only required for YouTube, Vimeo, and direct URL sources. **Local file ingestion runs fully offline.**
+- **A valid source** you have the right to transcribe — a YouTube/Vimeo URL, a direct media URL, or a local file path.
 
 ---
 
@@ -112,13 +120,25 @@ The dashboard is a single page with a header and three columns.
 
 ## Submitting a transcription job
 
-1. In the **Submit Job** panel, paste a YouTube URL into the URL field.
-   - Supported forms include `youtube.com/watch?v=...`, `youtu.be/...`, `youtube.com/shorts/...`, `youtube.com/embed/...`.
+1. In the **Submit Job** panel, paste a **video source** into the input field. The label reads "Video Source (URL or local file path)" — you can give it any of:
+
+   | Source | Example |
+   |---|---|
+   | YouTube | `https://www.youtube.com/watch?v=dQw4w9WgXcQ` |
+   | Vimeo | `https://vimeo.com/123456` |
+   | Direct video URL | `https://example.com/clip.mp4` |
+   | Local video file | `C:\Users\You\Videos\meeting.mp4` |
+   | Local audio file | `C:\Users\You\Downloads\interview.mp3` |
+
+   The API auto-detects which kind of source it is — you don't have to tell it.
+
 2. Pick a **Whisper model** from the dropdown. If you're unsure, start with `base`. See [Choosing the right Whisper model](#choosing-the-right-whisper-model).
 3. Click **Transcribe**.
 4. The status badge turns amber and shows `pending`. A `job_id` appears — that's the unique identifier for this run.
 
 You do **not** need to wait on this panel. You can submit the job and go do something else. When it finishes, the viewer loads the transcript automatically and the history refreshes.
+
+> **Windows tip — "Copy as path" inserts an invisible character.** When you right-click a file in File Explorer and choose *Copy as path*, Windows prepends a U+202A bidi mark to the clipboard. The handler strips it automatically (and also strips surrounding quotes), so you can paste straight from Explorer with no manual cleanup. If you ever see "Unrecognized source" on a path you know exists, double-check the path doesn't have a trailing space and that the file extension is one of the supported ones above.
 
 ---
 
@@ -129,7 +149,7 @@ The engine moves through these states:
 | Status | What's happening |
 |---|---|
 | `pending` | Job accepted. Waiting to start. |
-| `downloading` | yt-dlp is pulling the video from the source. |
+| `downloading` | The source is being fetched. YouTube/Vimeo: yt-dlp. Direct URL: httpx streamed download. Local file: in-process copy into `downloads/{job_id}/`. |
 | `extracting` | FFmpeg is stripping audio to a 16 kHz mono WAV. |
 | `transcribing` | faster-whisper is running the selected model over the audio. |
 | `complete` | Transcript is saved and ready to view/export. |
@@ -230,10 +250,19 @@ You can pick the model per-job in the UI. Each job records which model it used, 
 The API isn't running, or the UI can't reach it. Check Terminal 1 for `Application startup complete.` and confirm the UI's `API_BASE_URL` (default `http://localhost:8000`) matches.
 
 **Status jumps to `failed` immediately.**
-Usually an invalid URL or a YouTube extractor break. Try the URL in a browser to confirm it plays, then run `pip install -U yt-dlp` and retry.
+Depends on the source kind:
+- *YouTube / Vimeo:* usually a yt-dlp extractor break — try the URL in a browser to confirm it plays, then `pip install -U yt-dlp` and retry.
+- *Direct URL:* the server returned non-2xx or the URL doesn't end in a media extension the validator accepts. Use the actual file URL, not an embed page.
+- *Local file:* either the path doesn't exist, the extension isn't supported, or a `Permission denied` reading the source. Check the API terminal for the exact reason.
+
+**Submission rejected with 400 "Unrecognized source".**
+The input didn't match any of the four source types. Common causes:
+- Trailing space or stray quote on a pasted URL.
+- Local file with an extension outside `.mp4 / .mov / .mkv / .avi / .webm / .flv / .mp3 / .wav / .m4a`.
+- A redirect-style or query-string URL where the path component doesn't end in a media extension — point to the real file, not a player page.
 
 **Status stuck on `downloading` for a long time.**
-Large videos or slow networks. Watch the API terminal — yt-dlp logs progress there.
+Large videos or slow networks. Watch the API terminal — yt-dlp / httpx log progress there. For local files this stage should take seconds; if it's stuck, the source file is unusually large or on a slow / network drive.
 
 **Status stuck on `transcribing` for a long time.**
 Normal on CPU with larger models. Check the API terminal for Whisper progress. If it's truly hung, cancel (Ctrl-C the API) and retry with a smaller model.
@@ -256,10 +285,25 @@ The UI couldn't fetch history from the API. Confirm the API is up and reload the
 The UI is a convenience — everything it does is exposed on the REST API. If you prefer scripting:
 
 ```bash
-# Submit
+# Submit — YouTube
 curl -X POST http://localhost:8000/jobs \
   -H "Content-Type: application/json" \
   -d '{"url":"https://www.youtube.com/watch?v=dQw4w9WgXcQ","whisper_model":"base"}'
+
+# Submit — Vimeo
+curl -X POST http://localhost:8000/jobs \
+  -H "Content-Type: application/json" \
+  -d '{"url":"https://vimeo.com/123456","whisper_model":"base"}'
+
+# Submit — direct media URL
+curl -X POST http://localhost:8000/jobs \
+  -H "Content-Type: application/json" \
+  -d '{"url":"https://example.com/clip.mp4","whisper_model":"base"}'
+
+# Submit — local file (backslashes JSON-escaped)
+curl -X POST http://localhost:8000/jobs \
+  -H "Content-Type: application/json" \
+  -d '{"url":"C:\\Users\\You\\Videos\\meeting.mp4","whisper_model":"base"}'
 
 # Poll
 curl http://localhost:8000/jobs/<job_id>

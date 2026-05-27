@@ -1,13 +1,14 @@
 # NTH Transcript Engine
 
-A local, end-to-end video transcription pipeline. Paste a YouTube URL, pick a Whisper model, and get back a structured, timestamped transcript you can browse, copy, and export as TXT, SRT, JSON, or DOCX. All transcription runs locally via [`faster-whisper`](https://github.com/SYSTRAN/faster-whisper) — no third-party API calls, no data leaves your machine.
+A local, end-to-end transcription pipeline. Paste a **YouTube URL, Vimeo URL, direct video URL, or local file path** (video or audio), pick a Whisper model, and get back a structured, timestamped transcript you can browse, copy, and export as TXT, SRT, JSON, or DOCX. All transcription runs locally via [`faster-whisper`](https://github.com/SYSTRAN/faster-whisper) — no third-party API calls, no data leaves your machine.
 
-Built by NTH AI Dynamics as a four-sprint delivery:
+Built by NTH AI Dynamics as a five-sprint delivery:
 
 - **Sprint 1** — Foundation: data models, YouTube ingestion, FFmpeg audio extraction, Whisper engine
 - **Sprint 2** — API: SQLite persistence + FastAPI REST layer with background job processing
 - **Sprint 3** — UI: NiceGUI dashboard with submission, history, and viewer panels
 - **Sprint 4** — Exports: TXT / SRT / JSON / DOCX export engine and history browsing
+- **Sprint 5** — Multi-source ingestion: local files, direct video URLs, Vimeo — auto-detected from the submitted source string
 
 ---
 
@@ -31,40 +32,43 @@ Built by NTH AI Dynamics as a four-sprint delivery:
 ## Architecture
 
 ```
-                         ┌────────────────────────┐
-                         │   Browser (localhost)  │
-                         └───────────┬────────────┘
-                                     │ HTTP
-                         ┌───────────▼────────────┐
-                         │   NiceGUI Dashboard    │  ui/app.py  (port 8080)
-                         │  submit | history | viewer
-                         └───────────┬────────────┘
-                                     │ httpx (REST)
-                         ┌───────────▼────────────┐
-                         │   FastAPI REST API     │  api/main.py (port 8000)
-                         │   /jobs  /exports       │
-                         └───────────┬────────────┘
-                                     │
-                 ┌───────────────────┼──────────────────┐
-                 │                   │                  │
-         ┌───────▼─────┐     ┌───────▼──────┐    ┌──────▼──────┐
-         │ JobProcessor│     │ Repository    │    │  Exports    │
-         │ (daemon)    │     │ (SQLite)      │    │ txt/srt/    │
-         └───────┬─────┘     └───────────────┘    │ json/docx   │
-                 │                                 └─────────────┘
-    ┌────────────┼────────────┬──────────────┐
-    │            │            │              │
-┌───▼────┐ ┌─────▼────┐ ┌─────▼───────┐ ┌────▼──────┐
-│ yt-dlp │ │ FFmpeg    │ │ faster-     │ │ SQLite DB │
-│ download│ │ audio     │ │ whisper     │ │ persist   │
-└────────┘ └───────────┘ └─────────────┘ └───────────┘
+                       ┌────────────────────────┐
+                       │   Browser (localhost)  │
+                       └───────────┬────────────┘
+                                   │ HTTP
+                       ┌───────────▼────────────┐
+                       │   NiceGUI Dashboard    │  ui/app.py  (port 8080, configurable)
+                       │  submit | history | viewer
+                       └───────────┬────────────┘
+                                   │ httpx (REST)
+                       ┌───────────▼────────────┐
+                       │   FastAPI REST API     │  api/main.py (port 8000)
+                       │   /jobs  /exports       │
+                       │   source-type detector  │
+                       └───────────┬────────────┘
+                                   │
+               ┌───────────────────┼──────────────────┐
+               │                   │                  │
+       ┌───────▼─────┐     ┌───────▼──────┐    ┌──────▼──────┐
+       │ JobProcessor│     │ Repository    │    │  Exports    │
+       │ (daemon)    │     │ (SQLite)      │    │ txt/srt/    │
+       └───────┬─────┘     └───────────────┘    │ json/docx   │
+               │                                 └─────────────┘
+    ┌──────────┼──────────┬──────────┬───────────┐
+    │          │          │          │           │
+┌───▼────┐ ┌───▼────┐ ┌───▼────┐ ┌───▼────┐ ┌───▼─────┐
+│YouTube │ │ Vimeo  │ │Direct  │ │ Local  │ │ FFmpeg  │ → faster-whisper → SQLite
+│yt-dlp  │ │yt-dlp  │ │URL     │ │ file   │ │ 16 kHz  │
+│        │ │        │ │httpx   │ │ copy   │ │ mono WAV│
+└────────┘ └────────┘ └────────┘ └────────┘ └─────────┘
 ```
 
 **Flow:**
-1. User submits a YouTube URL + model choice in the UI.
-2. API creates a job row in SQLite and returns a `job_id` immediately (HTTP 202).
-3. A daemon thread runs the pipeline: download → extract audio → transcribe → persist transcript.
-4. UI polls `GET /jobs/{id}` until status is `complete`, then loads the transcript and enables exports.
+1. User submits a **source string** (YouTube URL, Vimeo URL, direct video URL, or local file path) + model choice in the UI.
+2. API's `_detect_source_type()` walks four validators in priority order and dispatches to the matching handler.
+3. API creates a job row in SQLite and returns a `job_id` immediately (HTTP 202).
+4. A daemon thread runs the pipeline: fetch (download or copy) → extract audio → transcribe → persist transcript.
+5. UI polls `GET /jobs/{id}` until status is `complete`, then loads the transcript and enables exports.
 
 ---
 
@@ -73,7 +77,9 @@ Built by NTH AI Dynamics as a four-sprint delivery:
 | Layer | Technology |
 |---|---|
 | Language | Python 3.11+ |
-| Video download | yt-dlp |
+| YouTube / Vimeo ingestion | yt-dlp |
+| Direct URL ingestion | httpx (streamed download) |
+| Local file ingestion | `shutil.copy2` (in-process) |
 | Audio extraction | FFmpeg 6.x (external binary) |
 | Transcription | faster-whisper (local Whisper models) |
 | REST API | FastAPI + uvicorn |
@@ -94,8 +100,8 @@ Pinned dependencies live in [requirements.txt](requirements.txt).
    - Windows (Chocolatey): `choco install ffmpeg`
    - macOS (Homebrew): `brew install ffmpeg`
    - Linux (Debian/Ubuntu): `sudo apt-get install ffmpeg`
-3. **Network access** — yt-dlp needs to reach the source site (e.g. YouTube) to download video. Transcription itself is fully local.
-4. **Disk space** — downloaded video/audio is stored under `downloads/` during processing. Plan for roughly 2–3× the video filesize in temp storage.
+3. **Network access** — required for YouTube, Vimeo, and direct video URL ingestion (yt-dlp and httpx need to reach the source). **Not required for local file ingestion** — those run fully offline. Transcription itself is always local.
+4. **Disk space** — fetched / copied video/audio is staged under `downloads/{job_id}/` during processing. Plan for roughly 2–3× the source file size in temp storage.
 
 ---
 
@@ -192,39 +198,45 @@ For quick drafts and clear podcast-style audio, `base` is a good default. For no
 
 ```
 NTHTranscribeEngine/
-├── api/                       # FastAPI REST layer
-│   ├── main.py                # App + lifespan (repo + processor init)
-│   ├── job_processor.py       # Background daemon pipeline
+├── api/                          # FastAPI REST layer
+│   ├── main.py                   # App + lifespan (repo + processor init)
+│   ├── job_processor.py          # Background daemon pipeline — dispatches per source_type
 │   ├── middleware/cors.py
 │   └── routes/
-│       ├── jobs.py            # POST/GET /jobs, /jobs/{id}, /jobs/{id}/transcript
-│       └── exports.py         # /jobs/{id}/transcript/export?format=...
-├── ui/                        # NiceGUI dashboard
-│   ├── app.py                 # Entry point — `python ui/app.py`
-│   ├── colors.py              # NTH dark-theme palette
+│       ├── jobs.py               # POST/GET /jobs + _detect_source_type() dispatcher
+│       └── exports.py            # /jobs/{id}/transcript/export?format=...
+├── ui/                           # NiceGUI dashboard
+│   ├── app.py                    # Entry point — `python -m ui.app` (from project root)
+│   ├── colors.py                 # NTH dark-theme palette
 │   └── panels/
 │       ├── job_submission_panel.py
 │       ├── history_panel.py
 │       └── transcript_viewer_panel.py
-├── ingestion/                 # Video source handlers
-│   └── youtube_handler.py     # yt-dlp + YouTube URL validation
-├── transcription/             # Audio-to-text pipeline
-│   ├── audio_extractor.py     # FFmpeg → 16 kHz mono WAV
-│   └── engine.py              # faster-whisper wrapper
+├── ingestion/                    # Source handlers — one per SourceType
+│   ├── youtube_handler.py        # yt-dlp + YouTube URL validation
+│   ├── vimeo_handler.py          # yt-dlp + Vimeo URL validation
+│   ├── url_handler.py            # httpx stream-download for direct video URLs
+│   └── local_file_handler.py     # shutil copy + Unicode-clean path validation
+├── transcription/                # Audio-to-text pipeline
+│   ├── audio_extractor.py        # FFmpeg → 16 kHz mono WAV
+│   └── engine.py                 # faster-whisper wrapper
 ├── storage/
-│   └── repository.py          # Thread-safe SQLite repository
-├── exports/                   # Pure-function formatters
+│   └── repository.py             # Thread-safe SQLite repository
+├── exports/                      # Pure-function formatters
 │   ├── txt_exporter.py
 │   ├── srt_exporter.py
 │   ├── json_exporter.py
 │   └── docx_exporter.py
 ├── models/
-│   └── transcript.py          # Frozen dataclasses + enums
-├── tests/                     # Sprint-aligned pytest suites
-├── downloads/                 # Temp video/audio (gitignored)
-├── nth_transcripts.db         # SQLite (created on first run)
+│   └── transcript.py             # Frozen dataclasses + enums (SourceType, JobStatus, ...)
+├── tests/                        # Sprint-aligned pytest suites (test_sprint1..5)
+├── .claude/agents/               # Per-sprint master docs + four-agent specs
+├── .gitignore                    # Excludes venv/, __pycache__/, downloads/, .env, *.db
+├── downloads/                    # Staging for fetched/copied media (gitignored)
+├── nth_transcripts.db            # SQLite (gitignored — created on first run)
+├── .env                          # Local config (gitignored)
+├── .env.example                  # Committed template
 ├── requirements.txt
-├── .env.example
 └── README.md
 ```
 
@@ -232,6 +244,8 @@ Key architectural rules:
 - `models/transcript.py` is **frozen** after Sprint 1. Downstream code imports, never redefines.
 - `exports/*` are pure functions: `(Transcript) -> bytes|str`. No I/O.
 - Repository is the only module that talks to SQLite; API + JobProcessor go through it.
+- Source-type validators are stateless (`__new__` without `__init__`) so the API-layer dispatcher in [api/routes/jobs.py](api/routes/jobs.py) can detect type without touching disk.
+- Prior-sprint files are frozen unless explicitly listed on a Sprint's allowlist; the QA Agent verifies via `git diff` before commit.
 
 ---
 
@@ -241,12 +255,21 @@ Base URL: `http://localhost:8000` — interactive docs at `/docs`.
 
 ### Submit a job
 
+The `url` field name is kept for backward compatibility but accepts any of four source forms — the API auto-detects which:
+
+| Source | Example value |
+|---|---|
+| YouTube | `https://www.youtube.com/watch?v=dQw4w9WgXcQ` |
+| Vimeo | `https://vimeo.com/123456` |
+| Direct video URL | `https://example.com/clip.mp4` |
+| Local file path | `C:\Users\You\Videos\meeting.mp4` (or `.mp3`, `.wav`, `.m4a`, etc.) |
+
 ```http
 POST /jobs
 Content-Type: application/json
 
 {
-  "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+  "url": "C:\\Users\\You\\Videos\\meeting.mp4",
   "whisper_model": "base"
 }
 ```
@@ -256,11 +279,13 @@ Content-Type: application/json
 {
   "job_id": "a1b2c3...",
   "status": "pending",
-  "source_url": "https://...",
+  "source_url": "C:\\Users\\You\\Videos\\meeting.mp4",
   "whisper_model": "base",
-  "created_at": "2026-04-20T15:02:11Z"
+  "created_at": "2026-04-27T21:16:37Z"
 }
 ```
+
+A garbage source returns **400 Bad Request** with `"Unrecognized source. Provide a YouTube URL, Vimeo URL, direct video URL ending in a media extension, or a local file path."`
 
 ### List jobs
 
@@ -293,10 +318,25 @@ Returns the file as a download with the appropriate `Content-Type` and `Content-
 ### cURL cheat sheet
 
 ```bash
-# Submit
+# Submit — YouTube
 curl -X POST http://localhost:8000/jobs \
   -H "Content-Type: application/json" \
   -d '{"url":"https://www.youtube.com/watch?v=dQw4w9WgXcQ","whisper_model":"base"}'
+
+# Submit — Vimeo
+curl -X POST http://localhost:8000/jobs \
+  -H "Content-Type: application/json" \
+  -d '{"url":"https://vimeo.com/123456","whisper_model":"base"}'
+
+# Submit — direct video URL
+curl -X POST http://localhost:8000/jobs \
+  -H "Content-Type: application/json" \
+  -d '{"url":"https://example.com/clip.mp4","whisper_model":"base"}'
+
+# Submit — local file (backslashes must be JSON-escaped)
+curl -X POST http://localhost:8000/jobs \
+  -H "Content-Type: application/json" \
+  -d '{"url":"C:\\Users\\You\\Videos\\meeting.mp4","whisper_model":"base"}'
 
 # Poll
 curl http://localhost:8000/jobs/<job_id>
@@ -320,7 +360,7 @@ SQLite file: `nth_transcripts.db` (path configurable via `DB_PATH`).
 |---|---|---|
 | `job_id` | TEXT PK | UUID |
 | `source_url` | TEXT | Input URL |
-| `source_type` | TEXT | `youtube`, `local_file`, `direct_url` |
+| `source_type` | TEXT | `youtube`, `vimeo`, `direct_url`, `local_file` |
 | `whisper_model` | TEXT | Requested model |
 | `status` | TEXT | State machine value |
 | `created_at` | TEXT | ISO 8601 |
@@ -363,9 +403,10 @@ pytest tests/test_sprint1_foundation.py -v   # models, ingestion, transcription
 pytest tests/test_sprint2_api.py -v          # repository + API endpoints
 pytest tests/test_sprint3_ui.py -v           # UI panel logic
 pytest tests/test_sprint4_exports.py -v      # export formatters
+pytest tests/test_sprint5_multi_source.py -v # local file / direct URL / Vimeo + dispatcher
 ```
 
-Tests rely on `pytest-mock` for external dependencies (yt-dlp, FFmpeg, Whisper), so they run offline and quickly.
+Tests rely on `pytest-mock` for external dependencies (yt-dlp, FFmpeg, Whisper, network), so they run offline and quickly. Full suite: **77 tests** across the five sprint files.
 
 ---
 
@@ -390,7 +431,19 @@ Fall back to `cpu` + `int8` to confirm the rest of the pipeline works, then debu
 Confirm the API is running at the URL in `API_BASE_URL` (default `http://localhost:8000`) and that nothing else is bound to port 8000.
 
 **YouTube download fails with extractor errors.**
-Upgrade yt-dlp — YouTube changes break it periodically: `pip install -U yt-dlp`.
+Upgrade yt-dlp — YouTube changes break it periodically: `pip install -U yt-dlp`. The same applies if a Vimeo extractor breaks.
+
+**Direct URL job fails with `Invalid direct video URL`.**
+The validator requires `http(s)://` and a path ending in a known media extension (`.mp4`, `.mov`, `.mkv`, `.avi`, `.webm`, `.flv`, `.mp3`, `.wav`, `.m4a`). HTML pages, query-string-disguised media, and pre-signed S3 URLs with no extension are rejected — point to the actual file, not an embed page.
+
+**Local file job fails with `Invalid local file path` despite the file existing.**
+Likely a Windows Explorer "Copy as path" artifact — the clipboard text starts with an invisible `U+202A` (Left-to-Right Embedding) character. The [LocalFileHandler](ingestion/local_file_handler.py) strips Cf-category Unicode chars and wrapping quotes, but if you're hitting this from a different OS-level paste tool, retype the path manually.
+
+**Port 8080 already in use when starting the UI.**
+Set `UI_PORT` in `.env` (e.g. `UI_PORT=8090`) and reopen the browser at the new port. The default `0.0.0.0` bind is also a candidate for tightening — consider running on `127.0.0.1` only if your host is multi-user.
+
+**Port 8000 already in use when starting the API.**
+Pass `--port 8001` (or any free port) and update `API_BASE_URL` in `.env` so the UI talks to the new port.
 
 ---
 
